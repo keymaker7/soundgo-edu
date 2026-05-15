@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>사운드고 키즈 - 손으로 배우는 음악 과학</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#fff}
+    .wrap{max-width:1160px;margin:0 auto;padding:16px}
+    h1{margin:6px 0 4px;font-size:30px}.sub{opacity:.82;margin-bottom:12px}
+    .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
+    .card{background:#17233a;border:1px solid #39547a;border-radius:14px;padding:12px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    button,select{border:none;border-radius:10px;padding:10px 12px;font-size:15px}
+    button{background:#ffd166;color:#111;font-weight:700;cursor:pointer}
+    select{background:#edf2f7}
+    .pill{padding:5px 10px;border-radius:999px;background:#243a5f;border:1px solid #436392;font-size:13px}
+    video,canvas{width:100%;border-radius:12px;background:#000;display:block}
+    .big{font-size:52px;font-weight:800;text-align:center;margin:10px 0;color:#ffd166}
+    .meter{height:14px;background:#324a5f;border-radius:999px;overflow:hidden}.fill{height:100%;width:0;background:#00d084}
+    .small{font-size:14px;opacity:.9}
+    .concept{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .box{background:#203251;border:1px solid #39547a;border-radius:10px;padding:8px}
+    .box b{color:#9bd1ff}
+    .mission li{margin:6px 0}
+    .ok{color:#5dff9f;font-weight:700}.wait{opacity:.7}
+    @media (max-width:920px){.grid{grid-template-columns:1fr}.big{font-size:42px}.concept{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🎵 사운드고 키즈 (초6 체험형 음악)</h1>
+    <div class="sub">손으로 <b>음 높이(주파수)</b>와 <b>소리 크기(진폭)</b>를 조절하며 음악 개념을 몸으로 배웁니다.</div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <div class="row">
+            <button id="startBtn">시작하기</button>
+            <select id="lessonMode">
+              <option value="free">자유 연주</option>
+              <option value="pitch">실험1: 음 높이</option>
+              <option value="volume">실험2: 소리 크기</option>
+              <option value="scale">실험3: 음계</option>
+            </select>
+            <select id="scale">
+              <option value="major">도레미(메이저)</option>
+              <option value="pentatonic">오음계</option>
+            </select>
+            <select id="wave">
+              <option value="sine">부드러운 소리</option>
+              <option value="square">게임 소리</option>
+            </select>
+          </div>
+          <div class="pill" id="statusPill">대기중</div>
+        </div>
+
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="small">현재 음</div>
+        <div id="noteBig" class="big">-</div>
+
+        <div class="small">소리 크기</div>
+        <div class="meter"><div class="fill" id="volFill"></div></div>
+        <div class="small" id="debug" style="margin-top:8px">준비중...</div>
+
+        <hr style="border-color:#39547a;margin:14px 0">
+        <h3 style="margin:0 0 8px">체험 포인트</h3>
+        <div class="concept">
+          <div class="box"><b>주파수(Hz)</b><br>손가락을 오른쪽으로 갈수록 높은 음</div>
+          <div class="box"><b>진폭(소리 크기)</b><br>손을 위로 올리고 핀치할수록 크게</div>
+          <div class="box"><b>파형</b><br>부드러운 소리 vs 게임 소리 비교</div>
+          <div class="box"><b>음계</b><br>메이저와 오음계 느낌 차이 듣기</div>
+        </div>
+
+        <h3 style="margin:12px 0 8px">오늘의 미션</h3>
+        <ol class="mission">
+          <li id="m1" class="wait">도 → 미 → 솔 순서로 소리 내기</li>
+          <li id="m2" class="wait">큰 소리(70%↑)와 작은 소리(20%↓) 만들기</li>
+          <li id="m3" class="wait">오음계로 5초 멜로디 만들기</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const lessonMode = document.getElementById('lessonMode');
+const scaleEl = document.getElementById('scale');
+const waveEl = document.getElementById('wave');
+const noteBig = document.getElementById('noteBig');
+const debug = document.getElementById('debug');
+const volFill = document.getElementById('volFill');
+const statusPill = document.getElementById('statusPill');
+const m1 = document.getElementById('m1');
+const m2 = document.getElementById('m2');
+const m3 = document.getElementById('m3');
+
+const NOTE_NAMES = ['도','도#','레','레#','미','파','파#','솔','솔#','라','라#','시'];
+const SCALES = { major:[0,2,4,5,7,9,11], pentatonic:[0,2,4,7,9] };
+const MIDI_BASE = 60;
+let osc, gain, started=false;
+
+// 미션 상태
+let missionSeq = []; let loud=false, soft=false; let pentaStart=0;
+
+const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const midiToFreq=(m)=>440*Math.pow(2,(m-69)/12);
+const noteName=(m)=>NOTE_NAMES[(Math.round(m)%12+12)%12];
+function pinch(lm){ const palm=d(lm[0],lm[9]); const ratio=d(lm[4],lm[8])/(palm||1e-6); return Math.max(0,Math.min(1,(0.8-ratio)/(0.8-0.3))); }
+function scaleNotes(){ const s=SCALES[scaleEl.value]; const arr=[]; for(let o=0;o<2;o++) for(const n of s) arr.push(MIDI_BASE+o*12+n); arr.push(MIDI_BASE+24); return arr; }
+function setDone(el, done){ el.className = done ? 'ok' : 'wait'; }
+
+function initAudio(){
+  osc = new Tone.Oscillator(220, waveEl.value).toDestination();
+  gain = new Tone.Gain(0).toDestination();
+  osc.disconnect(); osc.connect(gain); osc.start();
+}
+
+function handleMissions(note, vol, active){
+  if(active){
+    if(['도','미','솔'].includes(note)) missionSeq.push(note);
+    if(missionSeq.slice(-3).join('-')==='도-미-솔') setDone(m1,true);
+    if(vol>0.7) loud=true;
+    if(vol<0.2) soft=true;
+    setDone(m2, loud&&soft);
+    if(scaleEl.value==='pentatonic'){
+      if(!pentaStart) pentaStart=Date.now();
+      if(Date.now()-pentaStart>5000) setDone(m3,true);
+    } else pentaStart=0;
+  }
+}
+
+function onResults(results){
+  canvas.width = video.clientWidth; canvas.height = video.clientHeight;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  const hands = results.multiHandLandmarks || [];
+  if(!hands.length){
+    gain?.gain.rampTo(0,0.05); noteBig.textContent='-'; debug.textContent='손을 화면에 보여주세요'; volFill.style.width='0%'; statusPill.textContent='손 인식 대기';
+    return;
+  }
+
+  const h = hands[0], tip=h[8];
+  const x=Math.max(0,Math.min(1,1-tip.x));
+  const y=Math.max(0,Math.min(1,1-tip.y));
+  const p=pinch(h);
+
+  const notes=scaleNotes();
+  const midi = notes[Math.min(notes.length-1, Math.floor(x*notes.length))];
+  const freq=midiToFreq(midi);
+  const vol=Math.pow(y,1.6)*p*0.4;
+
+  osc.type = waveEl.value;
+  osc.frequency.rampTo(freq, 0.05);
+  gain.gain.rampTo(vol, 0.05);
+
+  const active = p>0.35;
+  const nn = noteName(midi);
+  noteBig.textContent = active ? nn : '(집으면 소리나요)';
+  debug.textContent = `주파수 ${freq.toFixed(1)}Hz · 핀치 ${Math.round(p*100)}% · 모드 ${lessonMode.value}`;
+  volFill.style.width = Math.round((vol/0.4)*100)+'%';
+  statusPill.textContent = active ? '연주중' : '준비';
+
+  if(lessonMode.value==='pitch') debug.textContent += ' | 오른쪽으로 갈수록 음↑';
+  if(lessonMode.value==='volume') debug.textContent += ' | 위로 갈수록 소리↑';
+  if(lessonMode.value==='scale') debug.textContent += ` | ${scaleEl.value==='major'?'메이저':'오음계'} 느낌 비교`;
+
+  handleMissions(nn, vol/0.4, active);
+  drawHand(h,p);
+}
+
+function drawHand(lm,p){
+  const con=[[0,5],[5,9],[9,13],[13,17],[0,17],[5,6],[6,7],[7,8],[9,10],[10,11],[11,12],[13,14],[14,15],[15,16],[17,18],[18,19],[19,20]];
+  ctx.strokeStyle=p>0.35?'#ffd166':'#7aa2c2'; ctx.lineWidth=2;
+  for(const [a,b] of con){ ctx.beginPath(); ctx.moveTo((1-lm[a].x)*canvas.width,lm[a].y*canvas.height); ctx.lineTo((1-lm[b].x)*canvas.width,lm[b].y*canvas.height); ctx.stroke(); }
+}
+
+startBtn.onclick = async ()=>{
+  if(started) return;
+  startBtn.disabled=true; startBtn.textContent='준비중...';
+  await Tone.start(); initAudio();
+
+  const hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}` });
+  hands.setOptions({ maxNumHands:1, modelComplexity:0, minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+  hands.onResults(onResults);
+
+  const cam = new Camera(video,{ onFrame: async()=>{ await hands.send({image:video}); }, width:960, height:540 });
+  await cam.start();
+
+  started=true; startBtn.textContent='실행 중'; statusPill.textContent='카메라 연결 완료';
+};
+</script>
+</body>
+</html>
