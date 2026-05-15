@@ -113,6 +113,11 @@ let osc, gain, started=false;
 // 미션 상태
 let missionSeq = []; let loud=false, soft=false; let pentaStart=0;
 
+// 인식 안정화(스무딩)
+let smoothX = 0.5, smoothY = 0.5, smoothP = 0;
+let hasSmooth = false;
+let lostFrames = 0;
+
 const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const midiToFreq=(m)=>440*Math.pow(2,(m-69)/12);
 const noteName=(m)=>NOTE_NAMES[(Math.round(m)%12+12)%12];
@@ -146,14 +151,33 @@ function onResults(results){
 
   const hands = results.multiHandLandmarks || [];
   if(!hands.length){
-    gain?.gain.rampTo(0,0.05); noteBig.textContent='-'; debug.textContent='손을 화면에 보여주세요'; volFill.style.width='0%'; statusPill.textContent='손 인식 대기';
+    lostFrames += 1;
+    if(lostFrames > 6){
+      gain?.gain.rampTo(0,0.08); noteBig.textContent='-'; debug.textContent='손을 화면에 보여주세요'; volFill.style.width='0%'; statusPill.textContent='손 인식 대기';
+      hasSmooth = false;
+    }
     return;
   }
 
+  lostFrames = 0;
   const h = hands[0], tip=h[8];
-  const x=Math.max(0,Math.min(1,1-tip.x));
-  const y=Math.max(0,Math.min(1,1-tip.y));
-  const p=pinch(h);
+  const rawX=Math.max(0,Math.min(1,1-tip.x));
+  const rawY=Math.max(0,Math.min(1,1-tip.y));
+  const rawP=pinch(h);
+
+  if(!hasSmooth){
+    smoothX = rawX; smoothY = rawY; smoothP = rawP; hasSmooth = true;
+  } else {
+    const aPos = 0.35;
+    const aPinch = 0.4;
+    smoothX += (rawX - smoothX) * aPos;
+    smoothY += (rawY - smoothY) * aPos;
+    smoothP += (rawP - smoothP) * aPinch;
+  }
+
+  const x=smoothX;
+  const y=smoothY;
+  const p=smoothP;
 
   const notes=scaleNotes();
   const midi = notes[Math.min(notes.length-1, Math.floor(x*notes.length))];
@@ -181,8 +205,27 @@ function onResults(results){
 
 function drawHand(lm,p){
   const con=[[0,5],[5,9],[9,13],[13,17],[0,17],[5,6],[6,7],[7,8],[9,10],[10,11],[11,12],[13,14],[14,15],[15,16],[17,18],[18,19],[19,20]];
-  ctx.strokeStyle=p>0.35?'#ffd166':'#7aa2c2'; ctx.lineWidth=2;
-  for(const [a,b] of con){ ctx.beginPath(); ctx.moveTo((1-lm[a].x)*canvas.width,lm[a].y*canvas.height); ctx.lineTo((1-lm[b].x)*canvas.width,lm[b].y*canvas.height); ctx.stroke(); }
+
+  // 인식된 손 영역 컬러 오버레이
+  const contour=[0,1,2,3,4,8,12,16,20,19,18,17];
+  ctx.beginPath();
+  contour.forEach((i,idx)=>{
+    const px=(1-lm[i].x)*canvas.width;
+    const py=lm[i].y*canvas.height;
+    if(idx===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+  });
+  ctx.closePath();
+  ctx.fillStyle = p>0.35 ? 'rgba(255, 209, 102, 0.25)' : 'rgba(90, 180, 255, 0.20)';
+  ctx.fill();
+
+  ctx.strokeStyle=p>0.35?'#ffd166':'#7aa2c2';
+  ctx.lineWidth=2;
+  for(const [a,b] of con){
+    ctx.beginPath();
+    ctx.moveTo((1-lm[a].x)*canvas.width,lm[a].y*canvas.height);
+    ctx.lineTo((1-lm[b].x)*canvas.width,lm[b].y*canvas.height);
+    ctx.stroke();
+  }
 }
 
 startBtn.onclick = async ()=>{
@@ -191,10 +234,15 @@ startBtn.onclick = async ()=>{
   await Tone.start(); initAudio();
 
   const hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}` });
-  hands.setOptions({ maxNumHands:1, modelComplexity:0, minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+  hands.setOptions({
+    maxNumHands:1,
+    modelComplexity:1,
+    minDetectionConfidence:0.45,
+    minTrackingConfidence:0.5
+  });
   hands.onResults(onResults);
 
-  const cam = new Camera(video,{ onFrame: async()=>{ await hands.send({image:video}); }, width:960, height:540 });
+  const cam = new Camera(video,{ onFrame: async()=>{ await hands.send({image:video}); }, width:1280, height:720 });
   await cam.start();
 
   started=true; startBtn.textContent='실행 중'; statusPill.textContent='카메라 연결 완료';
