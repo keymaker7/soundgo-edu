@@ -182,6 +182,19 @@ let lostFrames = 0;
 let lastNoteIdx = -1;
 let isActive = false;
 
+// 화면 가상 페달 (호버 게이지)
+const PEDALS = [
+  { id:'rec',   label:'● REC',  color:'#ff5d5d', action:()=>recBtn.click() },
+  { id:'play',  label:'▶ PLAY', color:'#5dff9f', action:()=>playBtn.click() },
+  { id:'od',    label:'⊕ OD',   color:'#7aa2c2', action:()=>odBtn.click() },
+  { id:'clr',   label:'✕ CLR',  color:'#cccccc', action:()=>clearBtn.click() },
+];
+let pedalHoverIdx = -1;
+let pedalHoverStart = 0;
+let pedalLastFire = 0;
+const PEDAL_DWELL_MS = 600;
+const PEDAL_COOLDOWN_MS = 1000;
+
 // 루프 스테이션 상태
 // 모드: idle | countin | recording | playing | overdub
 let loopMode = 'idle';
@@ -462,6 +475,73 @@ function handleEchoMode(note, active){
   }
 }
 
+function pedalRect(i){
+  // 캔버스 좌측 세로 4개. 영상 가운데 정렬.
+  const W = canvas.width, H = canvas.height;
+  const pw = Math.min(110, W*0.14);
+  const ph = Math.min(72, (H-30)/5);
+  const gap = 6;
+  const totalH = PEDALS.length*ph + (PEDALS.length-1)*gap;
+  const y0 = Math.max(40, (H - totalH)/2);
+  return { x: 10, y: y0 + i*(ph+gap), w: pw, h: ph };
+}
+
+function drawPedals(){
+  const now = performance.now();
+  for(let i=0;i<PEDALS.length;i++){
+    const r = pedalRect(i);
+    const hovering = (pedalHoverIdx === i);
+    const progress = hovering ? Math.min(1, (now - pedalHoverStart)/PEDAL_DWELL_MS) : 0;
+    const p = PEDALS[i];
+
+    // 배경
+    ctx.fillStyle = hovering ? 'rgba(11,18,32,0.92)' : 'rgba(11,18,32,0.78)';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    // 진행 게이지 (좌→우 fill)
+    if(progress > 0){
+      ctx.fillStyle = p.color + 'cc';
+      ctx.fillRect(r.x, r.y, r.w*progress, r.h);
+    }
+    // 외곽선
+    ctx.lineWidth = hovering ? 3 : 2;
+    ctx.strokeStyle = p.color;
+    ctx.strokeRect(r.x+0.5, r.y+0.5, r.w-1, r.h-1);
+    // 라벨
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 18px system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(p.label, r.x + r.w/2, r.y + r.h/2);
+  }
+  ctx.textBaseline = 'alphabetic';
+}
+
+function updatePedalHover(px, py){
+  const now = performance.now();
+  // 쿨다운 중이면 호버 무시
+  if(now - pedalLastFire < PEDAL_COOLDOWN_MS){
+    pedalHoverIdx = -1;
+    return;
+  }
+  let inside = -1;
+  for(let i=0;i<PEDALS.length;i++){
+    const r = pedalRect(i);
+    if(px>=r.x && px<=r.x+r.w && py>=r.y && py<=r.y+r.h){ inside = i; break; }
+  }
+  if(inside !== pedalHoverIdx){
+    pedalHoverIdx = inside;
+    pedalHoverStart = now;
+    return;
+  }
+  if(inside >= 0 && now - pedalHoverStart >= PEDAL_DWELL_MS){
+    // 발동
+    PEDALS[inside].action();
+    pedalLastFire = now;
+    pedalHoverIdx = -1;
+    statusPill.textContent = `페달 ${PEDALS[inside].label} 발동`;
+  }
+}
+
 function drawKeyboard(notes, curIdx, active){
   // 화면 하단에 음 영역 시각화 (피아노 건반처럼)
   const N = notes.length;
@@ -526,6 +606,8 @@ function onResults(results){
       lastNoteIdx = -1;
     }
     drawKeyboard(notes, -1, false);
+    drawPedals();
+    pedalHoverIdx = -1;
     return;
   }
 
@@ -534,6 +616,11 @@ function onResults(results){
   const rawX=Math.max(0,Math.min(1,1-tip.x));
   const rawY=Math.max(0,Math.min(1,1-tip.y));
   const rawP=pinch(h);
+
+  // 페달 호버 검사 (인덱스 tip의 캔버스 좌표)
+  const tipPx = (1-tip.x)*canvas.width;
+  const tipPy = tip.y*canvas.height;
+  updatePedalHover(tipPx, tipPy);
 
   if(!hasSmooth){
     smoothX = rawX; smoothY = rawY; smoothP = rawP; hasSmooth = true;
@@ -603,6 +690,7 @@ function onResults(results){
   handleEchoMode(nn, active);
   drawHand(h, p);
   drawKeyboard(notes, idx, active);
+  drawPedals();
 }
 
 function drawHand(lm,p){
