@@ -15,7 +15,9 @@
     button{background:#ffd166;color:#111;font-weight:700;cursor:pointer}
     select{background:#edf2f7}
     .pill{padding:5px 10px;border-radius:999px;background:#243a5f;border:1px solid #436392;font-size:13px}
+    .stage{position:relative;width:100%}
     video,canvas{width:100%;border-radius:12px;background:#000;display:block}
+    canvas{position:absolute;top:0;left:0}
     .big{font-size:52px;font-weight:800;text-align:center;margin:10px 0;color:#ffd166}
     .meter{height:14px;background:#324a5f;border-radius:999px;overflow:hidden}.fill{height:100%;width:0;background:#00d084}
     .small{font-size:14px;opacity:.9}
@@ -30,7 +32,7 @@
 <body>
   <div class="wrap">
     <h1>🎵 사운드고 키즈 (초6 체험형 음악)</h1>
-    <div class="sub">손으로 <b>음 높이(주파수)</b>와 <b>소리 크기(진폭)</b>를 조절하며 음악 개념을 몸으로 배웁니다.</div>
+    <div class="sub">✊ 손 펴면 무음 → 👌 <b>엄지+검지 모으면 연주 시작</b> → 손을 좌우로 움직여 음 바꾸기 → 풀면 끝.</div>
 
     <div class="grid">
       <div class="card">
@@ -42,6 +44,7 @@
               <option value="pitch">실험1: 음 높이</option>
               <option value="volume">실험2: 소리 크기</option>
               <option value="scale">실험3: 음계</option>
+              <option value="echo">실험4: 따라치기</option>
             </select>
             <select id="scale">
               <option value="major">도레미(메이저)</option>
@@ -49,14 +52,22 @@
             </select>
             <select id="wave">
               <option value="sine">부드러운 소리</option>
+              <option value="triangle">맑은 소리</option>
               <option value="square">게임 소리</option>
+            </select>
+            <select id="artic" title="음 표현">
+              <option value="staccato">또박또박(스타카토)</option>
+              <option value="legato">이어지게(레가토)</option>
+              <option value="portamento">슬라이드(포타멘토)</option>
             </select>
           </div>
           <div class="pill" id="statusPill">대기중</div>
         </div>
 
-        <video id="video" autoplay playsinline muted></video>
-        <canvas id="canvas"></canvas>
+        <div class="stage">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="canvas"></canvas>
+        </div>
       </div>
 
       <div class="card">
@@ -70,17 +81,18 @@
         <hr style="border-color:#39547a;margin:14px 0">
         <h3 style="margin:0 0 8px">체험 포인트</h3>
         <div class="concept">
-          <div class="box"><b>주파수(Hz)</b><br>손가락을 오른쪽으로 갈수록 높은 음</div>
-          <div class="box"><b>진폭(소리 크기)</b><br>손을 위로 올리고 핀치할수록 크게</div>
-          <div class="box"><b>파형</b><br>부드러운 소리 vs 게임 소리 비교</div>
-          <div class="box"><b>음계</b><br>메이저와 오음계 느낌 차이 듣기</div>
+          <div class="box"><b>음의 높이(주파수 Hz)</b><br>좌→우로 갈수록 높은 음. 2배 높아지면 한 옥타브</div>
+          <div class="box"><b>소리 크기(진폭)</b><br>손이 높을수록 + 핀치 강할수록 크게</div>
+          <div class="box"><b>파형</b><br>사인=부드러움 / 삼각=맑음 / 사각=게임</div>
+          <div class="box"><b>음계와 표현</b><br>메이저=밝음 / 오음계=동양적 / 스타카토=짧게</div>
         </div>
 
         <h3 style="margin:12px 0 8px">오늘의 미션</h3>
         <ol class="mission">
-          <li id="m1" class="wait">도 → 미 → 솔 순서로 소리 내기</li>
+          <li id="m1" class="wait">도 → 미 → 솔 순서로 또박또박 치기</li>
           <li id="m2" class="wait">큰 소리(70%↑)와 작은 소리(20%↓) 만들기</li>
-          <li id="m3" class="wait">오음계로 5초 멜로디 만들기</li>
+          <li id="m3" class="wait">오음계로 음 5개 이상 다른 음 멜로디 치기</li>
+          <li id="m4" class="wait">실험4 따라치기에서 시범 멜로디 1개 성공</li>
         </ol>
       </div>
     </div>
@@ -97,6 +109,7 @@ const startBtn = document.getElementById('startBtn');
 const lessonMode = document.getElementById('lessonMode');
 const scaleEl = document.getElementById('scale');
 const waveEl = document.getElementById('wave');
+const articEl = document.getElementById('artic');
 const noteBig = document.getElementById('noteBig');
 const debug = document.getElementById('debug');
 const volFill = document.getElementById('volFill');
@@ -104,19 +117,35 @@ const statusPill = document.getElementById('statusPill');
 const m1 = document.getElementById('m1');
 const m2 = document.getElementById('m2');
 const m3 = document.getElementById('m3');
+const m4 = document.getElementById('m4');
 
 const NOTE_NAMES = ['도','도#','레','레#','미','파','파#','솔','솔#','라','라#','시'];
 const SCALES = { major:[0,2,4,5,7,9,11], pentatonic:[0,2,4,7,9] };
 const MIDI_BASE = 60;
-let osc, gain, started=false;
+let osc, env, started=false;
 
 // 미션 상태
-let missionSeq = []; let loud=false, soft=false; let pentaStart=0;
+let missionSeq = []; let loud=false, soft=false;
+let distinctNotes = new Set();
+
+// 따라치기(echo) 미션 상태
+const ECHO_PATTERNS = [
+  { name:'도-레-미', notes:['도','레','미'] },
+  { name:'도-미-솔', notes:['도','미','솔'] },
+  { name:'솔-미-도', notes:['솔','미','도'] },
+];
+let echoPattern = null;
+let echoProgress = [];
+let echoLastDemoAt = 0;
 
 // 인식 안정화(스무딩)
 let smoothX = 0.5, smoothY = 0.5, smoothP = 0;
 let hasSmooth = false;
 let lostFrames = 0;
+
+// 노트 트리거 상태 — 슬라이딩 톤 방지의 핵심
+let lastNoteIdx = -1;
+let isActive = false;
 
 const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const midiToFreq=(m)=>440*Math.pow(2,(m-69)/12);
@@ -126,36 +155,154 @@ function scaleNotes(){ const s=SCALES[scaleEl.value]; const arr=[]; for(let o=0;
 function setDone(el, done){ el.className = done ? 'ok' : 'wait'; }
 
 function initAudio(){
-  osc = new Tone.Oscillator(220, waveEl.value).toDestination();
-  gain = new Tone.Gain(0).toDestination();
-  osc.disconnect(); osc.connect(gain); osc.start();
+  // AmplitudeEnvelope로 노트 ON/OFF 분명히 — 슬라이딩 톤 방지
+  env = new Tone.AmplitudeEnvelope({
+    attack:0.005, decay:0.06, sustain:0.7, release:0.12
+  }).toDestination();
+  osc = new Tone.Oscillator(220, waveEl.value);
+  osc.connect(env);
+  osc.start();
+}
+
+function applyArticulation(){
+  if(!env) return;
+  const a = articEl.value;
+  if(a==='staccato'){ env.attack=0.003; env.decay=0.05; env.sustain=0.5; env.release=0.08; }
+  else if(a==='legato'){ env.attack=0.02; env.decay=0.1; env.sustain=0.9; env.release=0.25; }
+  else /* portamento */ { env.attack=0.05; env.decay=0.1; env.sustain=0.85; env.release=0.5; }
+}
+
+function triggerNoteOn(midi, vel){
+  const freq = midiToFreq(midi);
+  // 포타멘토 모드만 부드러운 전환, 나머지는 즉시 (또박또박)
+  const rampSec = (articEl.value==='portamento') ? 0.08 : 0;
+  if(rampSec===0) osc.frequency.value = freq;
+  else osc.frequency.rampTo(freq, rampSec);
+  env.triggerAttack(undefined, vel);
+}
+function triggerNoteOff(){
+  env.triggerRelease();
 }
 
 function handleMissions(note, vol, active){
-  if(active){
-    if(['도','미','솔'].includes(note)) missionSeq.push(note);
-    if(missionSeq.slice(-3).join('-')==='도-미-솔') setDone(m1,true);
-    if(vol>0.7) loud=true;
-    if(vol<0.2) soft=true;
-    setDone(m2, loud&&soft);
-    if(scaleEl.value==='pentatonic'){
-      if(!pentaStart) pentaStart=Date.now();
-      if(Date.now()-pentaStart>5000) setDone(m3,true);
-    } else pentaStart=0;
+  if(!active) return;
+  // m1: 도→미→솔 순서 (또박또박 치기 — 노트 트리거 기반)
+  if(['도','미','솔'].includes(note)) missionSeq.push(note);
+  if(missionSeq.slice(-3).join('-')==='도-미-솔') setDone(m1,true);
+  // m2: 크고 작은 소리
+  if(vol>0.7) loud=true;
+  if(vol<0.2) soft=true;
+  setDone(m2, loud&&soft);
+  // m3: 오음계로 서로 다른 음 5개 이상
+  if(scaleEl.value==='pentatonic'){
+    distinctNotes.add(note);
+    if(distinctNotes.size >= 5) setDone(m3, true);
   }
+}
+
+function pickEchoPattern(){
+  echoPattern = ECHO_PATTERNS[Math.floor(Math.random()*ECHO_PATTERNS.length)];
+  echoProgress = [];
+  echoLastDemoAt = Date.now();
+  // 시범 재생: 0.4초 간격으로 멜로디 자동 재생
+  const notes = echoPattern.notes;
+  let t = 0;
+  notes.forEach((nn, i)=>{
+    setTimeout(()=>{
+      const idx = NOTE_NAMES.indexOf(nn);
+      const midi = MIDI_BASE + idx;
+      osc.frequency.value = midiToFreq(midi);
+      env.triggerAttackRelease(0.25, undefined, 0.6);
+    }, 400 + i*450);
+  });
+}
+
+function handleEchoMode(note, active){
+  if(lessonMode.value!=='echo') return;
+  if(!echoPattern || Date.now()-echoLastDemoAt > 8000){
+    pickEchoPattern();
+    return;
+  }
+  // active 첫 진입 시 1번만 진행
+  if(active && (echoProgress.length===0 || echoProgress[echoProgress.length-1]!==note)){
+    echoProgress.push(note);
+    const want = echoPattern.notes.slice(0, echoProgress.length);
+    const ok = want.every((n,i)=>echoProgress[i]===n);
+    if(!ok){
+      echoProgress = []; // 틀리면 리셋
+    } else if(echoProgress.length===echoPattern.notes.length){
+      setDone(m4, true);
+      statusPill.textContent = `🎉 ${echoPattern.name} 성공`;
+      echoLastDemoAt = Date.now() + 3000; // 3초 후 새 패턴
+      echoProgress = [];
+    }
+  }
+}
+
+function drawKeyboard(notes, curIdx, active){
+  // 화면 하단에 음 영역 시각화 (피아노 건반처럼)
+  const N = notes.length;
+  const w = canvas.width;
+  const h = 60;
+  const y0 = canvas.height - h - 6;
+  const cellW = w / N;
+  ctx.save();
+  for(let i=0;i<N;i++){
+    const x = i*cellW;
+    // 셀 배경
+    if(i===curIdx && active){
+      ctx.fillStyle = 'rgba(255,209,102,0.85)'; // 활성 노란색
+    } else if(i===curIdx){
+      ctx.fillStyle = 'rgba(122,162,194,0.55)'; // 가리키기만 (소리 X)
+    } else {
+      ctx.fillStyle = 'rgba(35,58,95,0.55)';
+    }
+    ctx.fillRect(x+2, y0, cellW-4, h);
+    // 음 이름
+    const nn = noteName(notes[i]);
+    const oct = Math.floor((notes[i]-MIDI_BASE)/12);
+    ctx.fillStyle = (i===curIdx && active) ? '#0b1220' : '#ffffff';
+    ctx.font = 'bold 16px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(nn + (oct>0?"'":''), x + cellW/2, y0 + 24);
+    // 옥타브 도/솔만 강조
+    if(nn==='도') {
+      ctx.strokeStyle = '#5dff9f';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x+2, y0, cellW-4, h);
+    }
+  }
+  // 미션·모드 안내 띠 (상단)
+  if(lessonMode.value==='echo' && echoPattern){
+    ctx.fillStyle = 'rgba(11,18,32,0.8)';
+    ctx.fillRect(0, 0, w, 36);
+    ctx.fillStyle = '#ffd166';
+    ctx.font = 'bold 18px system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText('🎧 따라치기: ' + echoPattern.notes.join(' → ') + '  (진행 ' + echoProgress.length + '/' + echoPattern.notes.length + ')', 12, 24);
+  }
+  ctx.restore();
 }
 
 function onResults(results){
   canvas.width = video.clientWidth; canvas.height = video.clientHeight;
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
+  const notes = scaleNotes();
+
   const hands = results.multiHandLandmarks || [];
   if(!hands.length){
     lostFrames += 1;
     if(lostFrames > 6){
-      gain?.gain.rampTo(0,0.08); noteBig.textContent='-'; debug.textContent='손을 화면에 보여주세요'; volFill.style.width='0%'; statusPill.textContent='손 인식 대기';
+      if(isActive){ triggerNoteOff(); isActive=false; }
+      noteBig.textContent='-';
+      debug.textContent='손을 화면에 보여주세요';
+      volFill.style.width='0%';
+      statusPill.textContent='손 인식 대기';
       hasSmooth = false;
+      lastNoteIdx = -1;
     }
+    drawKeyboard(notes, -1, false);
     return;
   }
 
@@ -168,39 +315,71 @@ function onResults(results){
   if(!hasSmooth){
     smoothX = rawX; smoothY = rawY; smoothP = rawP; hasSmooth = true;
   } else {
-    const aPos = 0.35;
-    const aPinch = 0.4;
+    const aPos = 0.45;
+    const aPinch = 0.5;
     smoothX += (rawX - smoothX) * aPos;
     smoothY += (rawY - smoothY) * aPos;
     smoothP += (rawP - smoothP) * aPinch;
   }
 
-  const x=smoothX;
-  const y=smoothY;
-  const p=smoothP;
+  const x=smoothX, y=smoothY, p=smoothP;
 
-  const notes=scaleNotes();
-  const midi = notes[Math.min(notes.length-1, Math.floor(x*notes.length))];
-  const freq=midiToFreq(midi);
-  const vol=Math.pow(y,1.6)*p*0.4;
+  const idx = Math.min(notes.length-1, Math.floor(x*notes.length));
+  const midi = notes[idx];
+  const freq = midiToFreq(midi);
+  const vel = Math.max(0.05, Math.pow(y,1.2));
 
   osc.type = waveEl.value;
-  osc.frequency.rampTo(freq, 0.05);
-  gain.gain.rampTo(vol, 0.05);
+  applyArticulation();
 
-  const active = p>0.35;
+  // 핀치 트리거 (히스테리시스: 들어갈 때 0.45 — 명확히 모아야 / 나갈 때 0.22)
+  // → 손 펴고 있으면 연주 X. 엄지+검지 모으면 ON. 풀면 OFF.
+  const active = isActive ? (p > 0.22) : (p > 0.45);
+
+  if(active && !isActive){
+    // 노트 ON
+    lastNoteIdx = idx;
+    triggerNoteOn(midi, vel);
+    isActive = true;
+  } else if(active && isActive){
+    // 노트 유지 중: 손이 다른 칸으로 넘어가면 새 노트 트리거 (또박또박)
+    if(idx !== lastNoteIdx){
+      if(articEl.value==='portamento'){
+        // 부드러운 전환 (옛 동작 유지)
+        osc.frequency.rampTo(freq, 0.08);
+      } else {
+        // 또박/이어지게: 새 노트 트리거 (스타카토는 짧고, 레가토는 길게)
+        env.triggerRelease();
+        setTimeout(()=>{ osc.frequency.value = freq; env.triggerAttack(undefined, vel); }, 8);
+      }
+      lastNoteIdx = idx;
+    }
+  } else if(!active && isActive){
+    // 노트 OFF
+    triggerNoteOff();
+    isActive = false;
+    lastNoteIdx = -1;
+  }
+
   const nn = noteName(midi);
-  noteBig.textContent = active ? nn : '(집으면 소리나요)';
-  debug.textContent = `주파수 ${freq.toFixed(1)}Hz · 핀치 ${Math.round(p*100)}% · 모드 ${lessonMode.value}`;
-  volFill.style.width = Math.round((vol/0.4)*100)+'%';
-  statusPill.textContent = active ? '연주중' : '준비';
+  const oct = Math.floor((midi-MIDI_BASE)/12);
+  noteBig.textContent = active ? (nn + (oct>0?"'":'')) : '✊→👌 두 손가락 모아 연주';
 
-  if(lessonMode.value==='pitch') debug.textContent += ' | 오른쪽으로 갈수록 음↑';
+  // 시각 디버그
+  const ratio = freq / midiToFreq(MIDI_BASE);
+  debug.textContent = `${freq.toFixed(1)}Hz · 도 대비 ${ratio.toFixed(2)}× · 핀치 ${Math.round(p*100)}% · 모드 ${lessonMode.value}`;
+  volFill.style.width = Math.round(vel*100)+'%';
+  statusPill.textContent = active ? `🎵 ${nn}${oct>0?"'":''}` : '준비';
+
+  if(lessonMode.value==='pitch') debug.textContent += ' | 좌우로 음 바꾸기';
   if(lessonMode.value==='volume') debug.textContent += ' | 위로 갈수록 소리↑';
-  if(lessonMode.value==='scale') debug.textContent += ` | ${scaleEl.value==='major'?'메이저':'오음계'} 느낌 비교`;
+  if(lessonMode.value==='scale') debug.textContent += ` | ${scaleEl.value==='major'?'메이저':'오음계'} 비교`;
+  if(lessonMode.value==='echo') debug.textContent += ' | 시범 멜로디를 그대로 따라쳐 보세요';
 
-  handleMissions(nn, vol/0.4, active);
-  drawHand(h,p);
+  handleMissions(nn, vel, active);
+  handleEchoMode(nn, active);
+  drawHand(h, p);
+  drawKeyboard(notes, idx, active);
 }
 
 function drawHand(lm,p){
@@ -228,10 +407,14 @@ function drawHand(lm,p){
   }
 }
 
+// 모드·음계·표현 변경 시 미션 일부 리셋
+scaleEl.onchange = ()=>{ distinctNotes.clear(); setDone(m3,false); };
+lessonMode.onchange = ()=>{ echoPattern = null; echoProgress = []; setDone(m4,false); };
+
 startBtn.onclick = async ()=>{
   if(started) return;
   startBtn.disabled=true; startBtn.textContent='준비중...';
-  await Tone.start(); initAudio();
+  await Tone.start(); initAudio(); applyArticulation();
 
   const hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}` });
   hands.setOptions({
