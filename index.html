@@ -64,6 +64,28 @@
           <div class="pill" id="statusPill">대기중</div>
         </div>
 
+        <!-- 루프 스테이션 컨트롤 -->
+        <div class="row" style="margin-bottom:8px;padding:8px;background:#0f1a2e;border-radius:10px;border:1px solid #2a4267">
+          <button id="recBtn" style="background:#ff5d5d;color:#fff">● REC</button>
+          <button id="playBtn" style="background:#5dff9f;color:#0b1220">▶ PLAY</button>
+          <button id="odBtn" style="background:#7aa2c2;color:#0b1220">⊕ OD</button>
+          <button id="clearBtn" style="background:#9b9b9b;color:#0b1220">✕ CLR</button>
+          <label class="small" style="display:flex;align-items:center;gap:6px">
+            <input type="checkbox" id="metroToggle" checked> 메트로놈
+          </label>
+          <label class="small" style="display:flex;align-items:center;gap:6px">
+            BPM
+            <input type="range" id="bpmSlider" min="60" max="180" step="5" value="100" style="width:90px">
+            <span id="bpmVal" class="pill">100</span>
+          </label>
+          <select id="loopBars" title="루프 길이">
+            <option value="2">2마디</option>
+            <option value="4" selected>4마디</option>
+            <option value="8">8마디</option>
+          </select>
+          <span class="pill" id="loopState">루프 비어있음</span>
+        </div>
+
         <div class="stage">
           <video id="video" autoplay playsinline muted></video>
           <canvas id="canvas"></canvas>
@@ -93,6 +115,7 @@
           <li id="m2" class="wait">큰 소리(70%↑)와 작은 소리(20%↓) 만들기</li>
           <li id="m3" class="wait">오음계로 음 5개 이상 다른 음 멜로디 치기</li>
           <li id="m4" class="wait">실험4 따라치기에서 시범 멜로디 1개 성공</li>
+          <li id="m5" class="wait">루프 스테이션으로 1개 이상 레이어 녹음</li>
         </ol>
       </div>
     </div>
@@ -118,6 +141,18 @@ const m1 = document.getElementById('m1');
 const m2 = document.getElementById('m2');
 const m3 = document.getElementById('m3');
 const m4 = document.getElementById('m4');
+const m5 = document.getElementById('m5');
+
+// 루프 스테이션 UI
+const recBtn = document.getElementById('recBtn');
+const playBtn = document.getElementById('playBtn');
+const odBtn = document.getElementById('odBtn');
+const clearBtn = document.getElementById('clearBtn');
+const metroToggle = document.getElementById('metroToggle');
+const bpmSlider = document.getElementById('bpmSlider');
+const bpmVal = document.getElementById('bpmVal');
+const loopBars = document.getElementById('loopBars');
+const loopState = document.getElementById('loopState');
 
 const NOTE_NAMES = ['도','도#','레','레#','미','파','파#','솔','솔#','라','라#','시'];
 const SCALES = { major:[0,2,4,5,7,9,11], pentatonic:[0,2,4,7,9] };
@@ -147,6 +182,20 @@ let lostFrames = 0;
 let lastNoteIdx = -1;
 let isActive = false;
 
+// 루프 스테이션 상태
+// 모드: idle | countin | recording | playing | overdub
+let loopMode = 'idle';
+let loopSynth = null;
+let metroSynth = null;
+let metroPart = null;
+let loopPart = null;          // Tone.Part — 녹음된 이벤트 시퀀스 반복
+let recordedEvents = [];      // {time, midi, vel, duration}
+let activeNoteStartTime = 0;  // 현재 핀치 노트 시작 시각 (Tone.Transport.seconds)
+let activeNoteStartMidi = 0;
+let activeNoteStartVel = 0;
+let countInBeats = 0;
+let layerCount = 0;
+
 const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 const midiToFreq=(m)=>440*Math.pow(2,(m-69)/12);
 const noteName=(m)=>NOTE_NAMES[(Math.round(m)%12+12)%12];
@@ -162,6 +211,42 @@ function initAudio(){
   osc = new Tone.Oscillator(220, waveEl.value);
   osc.connect(env);
   osc.start();
+
+  // 루프 재생용 신디 (라이브 osc와 분리 — 동시 발음 가능)
+  loopSynth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'triangle' },
+    envelope: { attack: 0.01, decay: 0.1, sustain: 0.4, release: 0.2 }
+  }).toDestination();
+  loopSynth.volume.value = -8;
+
+  // 메트로놈: 하이햇 느낌 노이즈 클릭
+  metroSynth = new Tone.MembraneSynth({
+    pitchDecay: 0.005,
+    octaves: 2,
+    envelope: { attack: 0.001, decay: 0.05, sustain: 0, release: 0.05 }
+  }).toDestination();
+  metroSynth.volume.value = -14;
+
+  // Transport 기본
+  Tone.Transport.bpm.value = parseInt(bpmSlider.value);
+  Tone.Transport.timeSignature = 4;
+  Tone.Transport.loop = false;
+}
+
+function startMetronome(){
+  if(metroPart) return;
+  metroPart = new Tone.Loop((time)=>{
+    const beat = Math.floor((Tone.Transport.ticks / Tone.Transport.PPQ) % 4);
+    const isDownbeat = beat === 0;
+    metroSynth.triggerAttackRelease(isDownbeat ? 'C3' : 'C2', '32n', time, isDownbeat ? 1 : 0.5);
+  }, '4n').start(0);
+}
+function stopMetronome(){
+  if(metroPart){ metroPart.dispose(); metroPart = null; }
+}
+function setMetronomeEnabled(on){
+  if(on && Tone.Transport.state === 'started') startMetronome();
+  else stopMetronome();
 }
 
 function applyArticulation(){
@@ -179,9 +264,147 @@ function triggerNoteOn(midi, vel){
   if(rampSec===0) osc.frequency.value = freq;
   else osc.frequency.rampTo(freq, rampSec);
   env.triggerAttack(undefined, vel);
+
+  // 루프 녹음 중이면 시작 시각 기록 (release 시 duration 계산)
+  if(loopMode === 'recording' || loopMode === 'overdub'){
+    activeNoteStartTime = Tone.Transport.seconds;
+    activeNoteStartMidi = midi;
+    activeNoteStartVel = vel;
+  }
 }
 function triggerNoteOff(){
   env.triggerRelease();
+
+  // 루프 녹음 중이면 이벤트 push
+  if((loopMode === 'recording' || loopMode === 'overdub') && activeNoteStartTime > 0){
+    const dur = Math.max(0.05, Tone.Transport.seconds - activeNoteStartTime);
+    const ev = {
+      time: activeNoteStartTime,  // Transport 절대 초
+      midi: activeNoteStartMidi,
+      vel: activeNoteStartVel,
+      duration: dur
+    };
+    pushRecordedEvent(ev);
+    activeNoteStartTime = 0;
+  }
+}
+
+// 루프 길이(초)
+function loopLengthSec(){
+  const bars = parseInt(loopBars.value);
+  const bpm = Tone.Transport.bpm.value;
+  return (60 / bpm) * 4 * bars;
+}
+
+function pushRecordedEvent(ev){
+  // time을 루프 길이 내로 wrap (overdub 시)
+  const L = loopLengthSec();
+  let t = ev.time % L;
+  recordedEvents.push({ ...ev, time: t });
+  // 라이브로 Part 갱신 (overdub 시 즉시 반영)
+  if(loopPart){
+    loopPart.add(t, { midi: ev.midi, vel: ev.vel, duration: ev.duration });
+  }
+}
+
+function buildLoopPart(){
+  if(loopPart){ loopPart.dispose(); loopPart = null; }
+  loopPart = new Tone.Part((time, ev)=>{
+    loopSynth.triggerAttackRelease(
+      Tone.Frequency(ev.midi, 'midi').toNote(),
+      ev.duration,
+      time,
+      ev.vel
+    );
+  }, recordedEvents.map(e=>[e.time, e]));
+  loopPart.loop = true;
+  loopPart.loopEnd = loopLengthSec();
+  loopPart.start(0);
+}
+
+function updateLoopState(){
+  const L = loopLengthSec().toFixed(1);
+  if(loopMode === 'idle')      loopState.textContent = `루프 비어있음 (${L}s)`;
+  if(loopMode === 'countin')   loopState.textContent = `🔴 카운트인 ${4-countInBeats}…`;
+  if(loopMode === 'recording') loopState.textContent = `🔴 녹음 중 (${L}s, ${recordedEvents.length}노트)`;
+  if(loopMode === 'playing')   loopState.textContent = `▶ 재생 중 · ${layerCount}레이어 · ${recordedEvents.length}노트`;
+  if(loopMode === 'overdub')   loopState.textContent = `⊕ 오버더빙 · ${layerCount}레이어 · ${recordedEvents.length}노트`;
+}
+
+function startCountIn(){
+  // 1마디(4박) 카운트인 → 녹음 시작
+  countInBeats = 0;
+  loopMode = 'countin';
+  metroToggle.checked = true;
+  setMetronomeEnabled(true);
+  if(Tone.Transport.state !== 'started'){
+    Tone.Transport.position = 0;
+    Tone.Transport.start();
+  }
+  const countInLoop = new Tone.Loop((time)=>{
+    countInBeats += 1;
+    updateLoopState();
+    if(countInBeats >= 4){
+      countInLoop.dispose();
+      // 다음 박부터 녹음 시작
+      Tone.Transport.scheduleOnce(()=>{
+        Tone.Transport.position = 0;
+        recordedEvents = [];
+        loopMode = 'recording';
+        updateLoopState();
+        // 녹음 길이 후 자동 정지
+        Tone.Transport.scheduleOnce((t)=>{
+          // 녹음 완료 → loopPart 만들고 재생
+          if(loopMode === 'recording'){
+            loopMode = 'playing';
+            layerCount = 1;
+            buildLoopPart();
+            setDone(m5, true);
+            updateLoopState();
+          }
+        }, `+${loopLengthSec()}`);
+      }, '+0');
+    }
+  }, '4n').start(0);
+}
+
+function startOverdub(){
+  if(loopMode !== 'playing') return;
+  loopMode = 'overdub';
+  layerCount += 1;
+  updateLoopState();
+}
+function stopOverdub(){
+  if(loopMode === 'overdub'){
+    loopMode = 'playing';
+    updateLoopState();
+  }
+}
+
+function playLoop(){
+  if(recordedEvents.length === 0){ loopState.textContent = '녹음된 루프 없음'; return; }
+  if(!loopPart) buildLoopPart();
+  if(Tone.Transport.state !== 'started'){
+    Tone.Transport.position = 0;
+    Tone.Transport.start();
+  }
+  loopMode = 'playing';
+  updateLoopState();
+}
+function stopLoop(){
+  if(loopPart){ loopPart.stop(0); }
+  Tone.Transport.stop();
+  Tone.Transport.position = 0;
+  loopMode = 'idle';
+  updateLoopState();
+}
+
+function clearLoop(){
+  if(loopPart){ loopPart.dispose(); loopPart = null; }
+  recordedEvents = [];
+  layerCount = 0;
+  loopMode = 'idle';
+  updateLoopState();
 }
 
 function handleMissions(note, vol, active){
@@ -411,10 +634,55 @@ function drawHand(lm,p){
 scaleEl.onchange = ()=>{ distinctNotes.clear(); setDone(m3,false); };
 lessonMode.onchange = ()=>{ echoPattern = null; echoProgress = []; setDone(m4,false); };
 
+// 루프 스테이션 컨트롤
+recBtn.onclick = async ()=>{
+  if(!started){ alert('먼저 "시작하기"를 눌러주세요.'); return; }
+  if(loopMode === 'idle'){
+    clearLoop();
+    startCountIn();
+  } else {
+    // 녹음 중 → 강제 정지 + 클리어
+    clearLoop();
+    Tone.Transport.stop();
+    Tone.Transport.position = 0;
+  }
+};
+playBtn.onclick = ()=>{
+  if(!started) return;
+  if(loopMode === 'playing' || loopMode === 'overdub'){
+    stopLoop();
+  } else if(recordedEvents.length > 0){
+    playLoop();
+  }
+};
+odBtn.onclick = ()=>{
+  if(loopMode === 'playing') startOverdub();
+  else if(loopMode === 'overdub') stopOverdub();
+};
+clearBtn.onclick = ()=>{
+  clearLoop();
+  Tone.Transport.stop();
+  Tone.Transport.position = 0;
+};
+metroToggle.onchange = (e)=>{
+  setMetronomeEnabled(e.target.checked);
+};
+bpmSlider.oninput = (e)=>{
+  bpmVal.textContent = e.target.value;
+  if(Tone.Transport) Tone.Transport.bpm.value = parseInt(e.target.value);
+  if(loopPart) loopPart.loopEnd = loopLengthSec();
+  updateLoopState();
+};
+loopBars.onchange = ()=>{
+  if(loopPart) loopPart.loopEnd = loopLengthSec();
+  updateLoopState();
+};
+
 startBtn.onclick = async ()=>{
   if(started) return;
   startBtn.disabled=true; startBtn.textContent='준비중...';
   await Tone.start(); initAudio(); applyArticulation();
+  updateLoopState();
 
   const hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}` });
   hands.setOptions({
@@ -430,6 +698,10 @@ startBtn.onclick = async ()=>{
 
   started=true; startBtn.textContent='실행 중'; statusPill.textContent='카메라 연결 완료';
 };
+
+// 초기 표시
+loopState.textContent = '시작하기 → REC';
+bpmVal.textContent = bpmSlider.value;
 </script>
 </body>
 </html>
